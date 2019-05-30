@@ -111,11 +111,13 @@ public:
 
     glTextureDescriptor *GetOrCreateTD(const wxRect &rect);
     bool BuildTexture(glTextureDescriptor *ptd, int base_level, const wxRect &rect);
-    bool PrepareTexture( int base_level, const wxRect &rect, ColorScheme color_scheme );
+    bool PrepareTexture( int base_level, const wxRect &rect, ColorScheme color_scheme, int mem_used );
     int GetTextureLevel( glTextureDescriptor *ptd, const wxRect &rect, int level,  ColorScheme color_scheme );
     bool UpdateCacheAllLevels( const wxRect &rect, ColorScheme color_scheme, unsigned char **compcomp_array, int *compcomp_size);
     bool IsLevelInCache( int level, const wxRect &rect, ColorScheme color_scheme );
     wxString GetChartPath(){ return m_ChartPath; }
+    wxString GetHashKey(){ return m_HashKey; }
+    void SetHashKey( wxString key ){ m_HashKey = key; }
     bool OnTimer();
     void AccumulateMemStatistics(int &map_size, int &comp_size, int &compcomp_size);
     void DeleteTexture(const wxRect &rect);
@@ -140,10 +142,6 @@ private:
     bool LoadHeader(void);
     bool WriteCatalogAndHeader();
 
-#if 0
-    bool UpdateCache(unsigned char *data, int data_size, glTextureDescriptor *ptd, int level,
-                                   ColorScheme color_scheme, bool write_catalog = true);
-#endif
     bool UpdateCachePrecomp(unsigned char *data, int data_size, const wxRect &rect, int level,
                                           ColorScheme color_scheme, bool write_catalog = true);
     bool UpdateCacheLevel( const wxRect &rect, int level, ColorScheme color_scheme, unsigned char *data, int size);
@@ -162,6 +160,7 @@ private:
 
 
     wxString    m_ChartPath;
+    wxString    m_HashKey;
     wxString    m_CompressedCacheFilePath;
     
     int         m_catalog_offset;

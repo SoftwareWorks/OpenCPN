@@ -39,6 +39,7 @@
 #include "chartdbs.h"
 #include "chartbase.h"
 #include "pluginmanager.h"
+#include "mbtiles.h"
 #include "mygeom.h"                     // For DouglasPeucker();
 #include "FlexHash.h"
 #ifndef UINT32
@@ -46,8 +47,9 @@
 #endif
 
 extern PlugInManager    *g_pi_manager;
+extern wxString         gWorldMapLocation;
 
-int s_dbVersion;                                //    Database version currently in use at runtime
+static int s_dbVersion;                         //    Database version currently in use at runtime
                                                 //  Needed for ChartTableEntry::GetChartType() only
                                                 //  TODO This can go away at opencpn Version 1.3.8 and above....
 ///////////////////////////////////////////////////////////////////////
@@ -62,7 +64,7 @@ bool FindMatchingFile(const wxString &theDir, const wxChar *theRegEx, int nameLe
 }
 
 
-ChartFamilyEnum GetChartFamily(int charttype)
+static ChartFamilyEnum GetChartFamily(int charttype)
 {
       ChartFamilyEnum cf;
 
@@ -146,6 +148,15 @@ bool ChartTableHeader::CheckValid()
 // ChartTableEntry
 ///////////////////////////////////////////////////////////////////////
 
+void ChartTableEntry::SetScale( int scale )
+{
+    Scale = scale;
+    rounding = 0;
+    // XXX find the right rounding
+    if (Scale >= 1000)
+       rounding = 5 *pow(10, log10(Scale) -2);
+}
+
 ChartTableEntry::ChartTableEntry(ChartBase &theChart)
 {
     Clear();
@@ -155,10 +166,10 @@ ChartTableEntry::ChartTableEntry(ChartBase &theChart)
     pFullPath = pt;
 
 
+    SetScale(theChart.GetNativeScale());
 
     ChartType = theChart.GetChartType();
     ChartFamily = theChart.GetChartFamily();
-    Scale = theChart.GetNativeScale();
 
     Skew = theChart.GetChartSkew();
     ProjectionType = theChart.GetChartProjectionType();
@@ -201,14 +212,8 @@ ChartTableEntry::ChartTableEntry(ChartBase &theChart)
           nPlyEntries = theChart.GetCOVRTablePoints(0);
           
           if(nPlyEntries > 5 && (LOD_meters > .01)){
-              wxArrayInt index_keep;
+              std::vector<int> index_keep{0, nPlyEntries-1, 1, nPlyEntries-2};
               
-              index_keep.Clear();
-              index_keep.Add(0);
-              index_keep.Add(nPlyEntries-1);
-              index_keep.Add(1);
-              index_keep.Add(nPlyEntries-2);
-
               double *DPbuffer = (double *)malloc(2 * nPlyEntries * sizeof(double));
               
               double *pfed = DPbuffer;
@@ -221,16 +226,15 @@ ChartTableEntry::ChartTableEntry(ChartBase &theChart)
               }
               
               DouglasPeucker(DPbuffer, 1, nPlyEntries-2, LOD_meters/(1852 * 60), &index_keep);
-//              printf("DB DP Reduction: %d/%d\n", index_keep.GetCount(), nPlyEntries);
+//              printf("DB DP Reduction: %d/%d\n", index_keep.size(), nPlyEntries);
 
               // Mark the keepers by adding a simple constant to ltp
-              for(unsigned int i=0 ; i < index_keep.GetCount() ; i++){
-                  int k = index_keep.Item(i);
-                  DPbuffer[2*k] += 2000.;
+              for(unsigned int i=0 ; i < index_keep.size() ; i++){
+                  DPbuffer[2*index_keep[i]] += 2000.;
               }
               
               
-              float *pf = (float *)malloc(2 * index_keep.GetCount() * sizeof(float));
+              float *pf = (float *)malloc(2 * index_keep.size() * sizeof(float));
               float *pfe = pf;
               
               for (int i = 0; i < nPlyEntries; i++) {
@@ -241,7 +245,7 @@ ChartTableEntry::ChartTableEntry(ChartBase &theChart)
               }
 
               pPlyTable = pf;
-              nPlyEntries = index_keep.GetCount();
+              nPlyEntries = index_keep.size();
               free( DPbuffer );
           }
           else {
@@ -292,13 +296,7 @@ ChartTableEntry::ChartTableEntry(ChartBase &theChart)
               int nPE = theChart.GetCOVRTablePoints(j);
               
               if(nPE > 5 && (LOD_meters > .01)){
-                  wxArrayInt index_keep;
-                  
-                  index_keep.Clear();
-                  index_keep.Add(0);
-                  index_keep.Add(nPE-1);
-                  index_keep.Add(1);
-                  index_keep.Add(nPE-2);
+                  std::vector<int> index_keep{0,nPE-1, 1, nPE-2};
                   
                   double *DPbuffer = (double *)malloc(2 * nPE * sizeof(double));
                   
@@ -312,16 +310,15 @@ ChartTableEntry::ChartTableEntry(ChartBase &theChart)
                   }
                   
                   DouglasPeucker(DPbuffer, 1, nPE-2, LOD_meters/(1852 * 60), &index_keep);
- //                 printf("DBa DP Reduction: %d/%d\n", index_keep.GetCount(), nPE);
+ //                 printf("DBa DP Reduction: %d/%d\n", index_keep.size(), nPE);
                   
                   // Mark the keepers by adding a simple constant to ltp
-                  for(unsigned int i=0 ; i < index_keep.GetCount() ; i++){
-                      int k = index_keep.Item(i);
-                      DPbuffer[2*k] += 2000.;
+                  for(unsigned int i=0 ; i < index_keep.size() ; i++){
+                      DPbuffer[2*index_keep[i]] += 2000.;
                   }
                   
                   
-                  float *pf = (float *)malloc(2 * index_keep.GetCount() * sizeof(float));
+                  float *pf = (float *)malloc(2 * index_keep.size() * sizeof(float));
                   float *pfe = pf;
                   
                   for (int i = 0; i < nPE; i++) {
@@ -332,7 +329,7 @@ ChartTableEntry::ChartTableEntry(ChartBase &theChart)
                   }
                   
                   pft0[j] = pf;
-                  pip[j] = index_keep.GetCount();
+                  pip[j] = index_keep.size();
                   free( DPbuffer );
               }
               else {
@@ -351,6 +348,9 @@ ChartTableEntry::ChartTableEntry(ChartBase &theChart)
     //  Get and populate the NoCovr tables
     
     nNoCovrPlyEntries = theChart.GetNoCOVREntries();
+    if (nNoCovrPlyEntries == 0)
+        return;
+
     float **pfpnc = (float **)malloc(nNoCovrPlyEntries * sizeof(float *));
     float **pft0nc = pfpnc;
     int *pipnc = (int *)malloc(nNoCovrPlyEntries * sizeof(int));
@@ -409,13 +409,13 @@ bool ChartTableEntry::IsEqualTo(const ChartTableEntry &cte) const {
 
 ///////////////////////////////////////////////////////////////////////
 
-int ChartTableEntry::GetChartType() const
+static int convertChartType(int charttype)
 {
       //    Hackeroo here....
       //    dB version 14 had different ChartType Enum, patch it here
       if(s_dbVersion == 14)
       {
-            switch(ChartType)
+            switch(charttype)
             {
                   case 0: return CHART_TYPE_KAP;
                   case 1: return CHART_TYPE_GEO;
@@ -428,15 +428,14 @@ int ChartTableEntry::GetChartType() const
                   default: return CHART_TYPE_UNKNOWN;
             }
       }
-      else
-       return ChartType;
+      return charttype;
 }
 
-int ChartTableEntry::GetChartFamily() const
+static int convertChartFamily(int charttype, int chartfamily)
 {
     if(s_dbVersion < 18)
     {
-        switch(ChartType)
+        switch(charttype)
         {
             case CHART_TYPE_KAP:
             case CHART_TYPE_GEO:
@@ -451,11 +450,8 @@ int ChartTableEntry::GetChartFamily() const
                   return CHART_FAMILY_UNKNOWN;
       }
     }
-    else
-        return ChartFamily;
+    return chartfamily;
 }
-
-
 
 
 bool ChartTableEntry::Read(const ChartDatabase *pDb, wxInputStream &is)
@@ -502,7 +498,7 @@ bool ChartTableEntry::Read(const ChartDatabase *pDb, wxInputStream &is)
         Skew = cte.skew;
         ProjectionType = cte.ProjectionType;
         
-        Scale = cte.Scale;
+        SetScale(cte.Scale);
         edition_date = cte.edition_date;
         file_date = cte.file_date;
         
@@ -579,7 +575,7 @@ bool ChartTableEntry::Read(const ChartDatabase *pDb, wxInputStream &is)
         Skew = cte.skew;
         ProjectionType = cte.ProjectionType;
         
-        Scale = cte.Scale;
+        SetScale(cte.Scale);
         edition_date = cte.edition_date;
         file_date = cte.file_date;
         
@@ -657,7 +653,7 @@ bool ChartTableEntry::Read(const ChartDatabase *pDb, wxInputStream &is)
           Skew = cte.skew;
           ProjectionType = cte.ProjectionType;
 
-          Scale = cte.Scale;
+          SetScale(cte.Scale);
           edition_date = cte.edition_date;
           file_date = cte.file_date;
 
@@ -709,7 +705,7 @@ bool ChartTableEntry::Read(const ChartDatabase *pDb, wxInputStream &is)
 
       m_bbox.Set(LatMin, LatMax, LonMin, LonMax);
       
-      Scale = cte.Scale;
+      SetScale(cte.Scale);
       edition_date = cte.edition_date;
       file_date = cte.file_date;
 
@@ -759,7 +755,7 @@ bool ChartTableEntry::Read(const ChartDatabase *pDb, wxInputStream &is)
 
           m_bbox.Set(LatMin, LatMax, LonMin, LonMax);
           
-          Scale = cte.Scale;
+          SetScale(cte.Scale);
           edition_date = cte.edition_date;
           file_date = 0;                        //  file_date does not exist in V14;
           nPlyEntries = cte.nPlyEntries;
@@ -785,6 +781,8 @@ bool ChartTableEntry::Read(const ChartDatabase *pDb, wxInputStream &is)
                 }
           }
     }
+    ChartFamily = convertChartFamily(ChartType, ChartFamily);
+    ChartType = convertChartType(ChartType);
 
     return true;
 }
@@ -884,8 +882,174 @@ void ChartTableEntry::Disable()
     // Mark this chart in the database, so that it will not be seen during this run
     // How?  By setting the chart bounding box to an absurd value
     // TODO... Fix this heinous hack
-    LatMax = (float) 100.;
-    LatMin = (float)91.;
+    LatMax += (float) 1000.;
+    LatMin += (float)1000.;
+}
+
+void ChartTableEntry::ReEnable()
+{
+    if(LatMax >90.){
+        LatMax -= (float) 1000.;
+        LatMin -= (float) 1000.;
+    }
+}
+
+std::vector<float> ChartTableEntry::GetReducedPlyPoints()
+{
+    if(m_reducedPlyPoints.size())
+        return m_reducedPlyPoints;
+    
+    //  Reduce the LOD of the chart outline PlyPoints
+    float LOD_meters = 1; 
+    
+    float plylat, plylon;
+    const int nPoints = GetnPlyEntries();
+
+    float *fpo = GetpPlyTable();
+
+    double *ppd = new double[nPoints * 2];
+    double *ppsm = new double[nPoints * 2];
+    double *npr = ppd;
+    double *npsm= ppsm;
+    for( int i = 0; i < nPoints; i++ ) {
+        plylat = fpo[i*2];
+        plylon = fpo[i*2+1];
+
+        double x, y;
+        toSM(plylat, plylon, fpo[0], fpo[1], &x, &y);
+
+        *npr++ = plylon;
+        *npr++ = plylat;
+        *npsm++ = x;
+        *npsm++ = y;
+    }
+
+    std::vector<int> index_keep;
+    if(nPoints > 10){
+        index_keep.push_back(0);
+        index_keep.push_back(nPoints-1);
+        index_keep.push_back(1);
+        index_keep.push_back(nPoints-2);
+
+                
+        DouglasPeuckerM(ppsm, 1, nPoints-2, LOD_meters , &index_keep);
+                
+    }
+    else {
+        index_keep.resize(nPoints);
+        for(int i = 0 ; i < nPoints ; i++)
+            index_keep[i] = i;
+    }
+            
+    double *ppr = ppd;  
+    for(int ip = 0 ; ip < nPoints ; ip++){
+        double x = *ppr++;
+        double y = *ppr++;
+                
+        for(unsigned int j=0 ; j < index_keep.size() ; j++){
+            if(index_keep[j] == ip){
+                m_reducedPlyPoints.push_back(x);
+                m_reducedPlyPoints.push_back(y);
+                break;
+            }
+        }
+    }
+    
+    delete[] ppd;
+    delete[] ppsm;
+    
+    int nprr = m_reducedPlyPoints.size() / 2;
+   
+    return m_reducedPlyPoints;
+
+}
+
+std::vector<float> ChartTableEntry::GetReducedAuxPlyPoints( int iTable)
+{
+    //  Maybe need to initialize the vector
+    if( !m_reducedAuxPlyPointsVector.size()){
+        std::vector<float> vec;
+        for(int i=0 ; i < GetnAuxPlyEntries() ; i++){
+            m_reducedAuxPlyPointsVector.push_back(vec);
+        }
+    }
+    
+    std::vector<float> vec;
+
+    //  Invalid parameter
+    if((unsigned int)iTable >= m_reducedAuxPlyPointsVector.size())
+        return vec;
+    
+    if( m_reducedAuxPlyPointsVector.at(iTable).size())
+        return m_reducedAuxPlyPointsVector.at(iTable);
+    
+    //  Reduce the LOD of the chart outline PlyPoints
+    float LOD_meters = 1.0;
+    
+    const int nPoints = GetAuxCntTableEntry(iTable);
+    float *fpo = GetpAuxPlyTableEntry(iTable);
+
+    double *ppd = new double[nPoints * 2];
+    double *ppsm = new double[nPoints * 2];
+    double *npr = ppd;
+    double *npsm= ppsm;
+    float plylat, plylon;
+    
+    for( int i = 0; i < nPoints; i++ ) {
+        plylat = fpo[i*2];
+        plylon = fpo[i*2+1];
+
+        double x, y;
+        toSM(plylat, plylon, fpo[0], fpo[1], &x, &y);
+
+        *npr++ = plylon;
+        *npr++ = plylat;
+        *npsm++ = x;
+        *npsm++ = y;
+    }
+
+
+    std::vector<int> index_keep;
+    if(nPoints > 10 ){
+        index_keep.push_back(0);
+        index_keep.push_back(nPoints-1);
+        index_keep.push_back(1);
+        index_keep.push_back(nPoints-2);
+                
+        DouglasPeuckerM(ppsm, 1, nPoints - 2, LOD_meters, &index_keep);
+                
+    }
+    else {
+        index_keep.resize(nPoints);
+        for(int i = 0 ; i < nPoints ; i++)
+            index_keep[i] = i;
+    }
+   
+   int nnn = index_keep.size();
+   
+    double *ppr = ppd;  
+    for(int ip = 0 ; ip < nPoints ; ip++){
+        double x = *ppr++;
+        double y = *ppr++;
+                
+        for(unsigned int j=0 ; j < index_keep.size() ; j++){
+            if(index_keep[j] == ip){
+                vec.push_back(x);
+                vec.push_back(y);
+                break;
+            }
+        }
+    }
+    
+    delete[] ppd;
+    delete[] ppsm;
+
+    m_reducedAuxPlyPointsVector[iTable] = vec;
+    
+    int nprr = vec.size() / 2;
+    
+    return vec;
+
 }
 
 ///////////////////////////////////////////////////////////////////////
@@ -897,6 +1061,7 @@ WX_DEFINE_OBJARRAY(ArrayOfChartClassDescriptor);
 
 ChartDatabase::ChartDatabase()
 {
+      bValid = false;
       m_ChartTableEntryDummy.Clear();
 
       UpdateChartClassDescriptorArray();
@@ -919,6 +1084,8 @@ void ChartDatabase::UpdateChartClassDescriptorArray(void)
       m_ChartClassDescriptorArray.Add(pcd);
       pcd = new ChartClassDescriptor(_T("cm93compchart"), _T("00300000.a"), BUILTIN_DESCRIPTOR);
       m_ChartClassDescriptorArray.Add(pcd);
+      pcd = new ChartClassDescriptor(_T("ChartMBTiles"), _T("*.mbtiles"), BUILTIN_DESCRIPTOR);
+      m_ChartClassDescriptorArray.Add(pcd);
       
       //    If the PlugIn Manager exists, get the array of dynamically loadable chart class names
       if(g_pi_manager)
@@ -927,7 +1094,7 @@ void ChartDatabase::UpdateChartClassDescriptorArray(void)
             for(unsigned int j = 0 ; j < array.GetCount() ; j++)
             {
                   //    Instantiate a blank chart to retrieve the directory search mask for this chart type
-                  wxString class_name = array.Item(j);
+                  wxString class_name = array[j];
                   ChartPlugInWrapper *cpiw = new ChartPlugInWrapper(class_name);
                   if(cpiw)
                   {
@@ -975,10 +1142,10 @@ bool ChartDatabase::CompareChartDirArray( ArrayOfCDI& test_array )
     unsigned int nfound_outer = 0;
     
     for(unsigned int i = 0 ; i < test_array.GetCount() ; i++){
-        ChartDirInfo p = test_array.Item(i);
+        ChartDirInfo p = test_array[i];
         bfound_inner = false;
         for(unsigned int j = 0 ; j < m_dir_array.GetCount() ; j++){
-            ChartDirInfo q = m_dir_array.Item(j);
+            ChartDirInfo q = m_dir_array[j];
             
             if(p.fullpath.IsSameAs(q.fullpath)){
                 bfound_inner = true;
@@ -996,7 +1163,7 @@ bool ChartDatabase::CompareChartDirArray( ArrayOfCDI& test_array )
 wxString ChartDatabase::GetMagicNumberCached(wxString dir)
 {
     for(unsigned int j = 0 ; j < m_dir_array.GetCount() ; j++){
-        ChartDirInfo q = m_dir_array.Item(j);
+        ChartDirInfo q = m_dir_array[j];
         if(dir.IsSameAs(q.fullpath))
             return q.magic_number;
     }
@@ -1283,6 +1450,8 @@ wxString ChartDatabase::GetFullChartInfo(ChartBase *pc, int dbIndex, int *char_w
                   line += _("Transverse Mercator");
             else if(PROJECTION_POLYCONIC == cte.GetChartProjectionType())
                   line += _("Polyconic");
+            else if(PROJECTION_WEB_MERCATOR == cte.GetChartProjectionType())
+                line += _("Web Mercator (EPSG:3857)");
             line += _T("\n");
             max_width = wxMax(max_width, line.Len());
             r += line;
@@ -1393,9 +1562,14 @@ bool ChartDatabase::Update(ArrayOfCDI& dir_array, bool bForce, wxGenericProgress
 
       for(unsigned int j=0 ; j<dir_array.GetCount() ; j++)
       {
-            ChartDirInfo dir_info = dir_array.Item(j);
+            ChartDirInfo dir_info = dir_array[j];
 
             wxString dir_magic;
+            if( !wxDir::FindFirst(dir_info.fullpath, "poly-*-1.dat").empty() ) {
+            //If some polygons exist in the directory, set it as the one to use for GSHHG
+            //TODO: We should probably compare the version and maybe resolutions available with what is currently used...
+                gWorldMapLocation = dir_info.fullpath + wxFileName::GetPathSeparator();
+            }
             TraverseDirAndAddCharts(dir_info, pprog, dir_magic, lbForce);
 
         //  Update the dir_list entry, even if the magic values are the same
@@ -1555,7 +1729,7 @@ int ChartDatabase::TraverseDirAndAddCharts(ChartDirInfo& dir_info, wxGenericProg
       //    Look for all possible defined chart classes
       for(unsigned int i = 0 ; i < m_ChartClassDescriptorArray.GetCount() ; i++)
       {
-            nAdd += SearchDirAndAddCharts(dir_path, m_ChartClassDescriptorArray.Item(i), pprog);
+            nAdd += SearchDirAndAddCharts(dir_path, m_ChartClassDescriptorArray[i], pprog);
       }
 
       return nAdd;
@@ -1587,7 +1761,7 @@ bool ChartDatabase::DetectDirChange(const wxString & dir_path, const wxString & 
             if(pprog && (ifile % (n_files / 60 + 1)) == 0)
                   pprog->Update(wxMin((ifile * 100) /n_files, 100), dir_path);
 
-            wxFileName file(FileList.Item(ifile));
+            wxFileName file(FileList[ifile]);
 
             // NOTE. Do not ever try to optimize this code by combining `wxString` calls.
             // Otherwise `fileNameUTF8` will point to a stale buffer overwritten by garbage.
@@ -1677,8 +1851,8 @@ bool ChartDatabase::Check_CM93_Structure(wxString dir_name)
 
                   wxRegEx test_n(_T("^[A-Ga-g]"));
                   bool b_probably_found_cm93 = false;
-                  bool b_cont_n = dir_n.GetFirst(&candidate_n);
-                  while(b_cont_n)
+                  bool b_cont_n = dir_n.IsOpened() && dir_n.GetFirst(&candidate_n);
+                 while(b_cont_n)
                   {
                         if(test_n.Matches(candidate_n) && (candidate_n.Len() == 1))
                         {
@@ -1787,7 +1961,7 @@ wxString ChartDatabase::Get_CM93_FileName(wxString dir_name)
                                     find_unique = true;
                                     for(unsigned int ifile=0; ifile < m_cm93_filename_array.GetCount(); ifile++)
                                     {
-                                          if(m_cm93_filename_array.Item(ifile) == one_file)
+                                          if(m_cm93_filename_array[ifile] == one_file)
                                                 find_unique = false;
                                     }
                                     if(!find_unique)
@@ -1912,7 +2086,7 @@ int ChartDatabase::SearchDirAndAddCharts(wxString& dir_name_base,
 
       for(int ifile=0 ; ifile < nFile ; ifile++)
       {
-            wxFileName file(FileList.Item(ifile));
+            wxFileName file(FileList[ifile]);
             wxString full_name = file.GetFullPath();
             wxString file_name = file.GetFullName();
             //    Validate the file name again, considering MSW's semi-random treatment of case....
@@ -1966,19 +2140,17 @@ int ChartDatabase::SearchDirAndAddCharts(wxString& dir_name_base,
                 }
             }
 
+            wxString msg_fn(full_name);
+            msg_fn.Replace(_T("%"), _T("%%"));
             if( file_time_is_same ) {
                 // Produce the same output without actually calling `CreateChartTableEntry()`.
-                wxString msg = wxT("Loading chart data for ");
-                msg.Append(full_name);
-                wxLogMessage(msg);
+                wxLogMessage(wxString::Format(_T("Loading chart data for %s"), msg_fn.c_str()));
             } else {
                 pnewChart = CreateChartTableEntry(full_name, chart_desc);
                 if(!pnewChart)
                 {
                     bAddFinal = false;
-                    wxString msg = _T("   CreateChartTableEntry() failed for file: ");
-                    msg.Append(full_name);
-                    wxLogMessage(msg);
+                    wxLogMessage(wxString::Format(_T("   CreateChartTableEntry() failed for file: %s"), msg_fn.c_str()));
                 }
             }
 
@@ -1988,9 +2160,7 @@ int ChartDatabase::SearchDirAndAddCharts(wxString& dir_name_base,
             }
             else if( file_path_is_same )
             {
-                wxString msg = _T("   Replacing older chart file of same path: ");
-                msg.Append(full_name);
-                wxLogMessage(msg);
+                wxLogMessage(wxString::Format(_T("   Replacing older chart file of same path: %s"), msg_fn.c_str()));
             }
             else if( !file_time_is_same )
             {
@@ -2007,9 +2177,7 @@ int ChartDatabase::SearchDirAndAddCharts(wxString& dir_name_base,
                     {
                         pEntry->SetValid(true);
                         bAddFinal = false;
-                        wxString msg = _T("   Retaining newer chart file of same name: ");
-                        msg.Append(full_name);
-                        wxLogMessage(msg);
+                        wxLogMessage(wxString::Format(_T("   Retaining newer chart file of same name: %s"), msg_fn.c_str()));
 
                     }
                 }
@@ -2026,9 +2194,7 @@ int ChartDatabase::SearchDirAndAddCharts(wxString& dir_name_base,
                 {
                     pEntry->SetValid(false);
                     bAddFinal = true;
-                    wxString msg = _T("   Replacing older chart file of same name: ");
-                    msg.Append(full_name);
-                    wxLogMessage(msg);
+                    wxLogMessage(wxString::Format(_T("   Replacing older chart file of same name: %s"), msg_fn.c_str()));
                 }
             }
 
@@ -2037,9 +2203,7 @@ int ChartDatabase::SearchDirAndAddCharts(wxString& dir_name_base,
             {
                   if(0 == b_add_msg)
                   {
-                        wxString msg = _T("   Adding chart file: ");
-                        msg.Append(full_name);
-                        wxLogMessage(msg);
+                        wxLogMessage(wxString::Format(_T("   Adding chart file: %s"), msg_fn.c_str()));
                   }
                   collision_map[file_name] = active_chartTable.GetCount();
                   active_chartTable.Add(pnewChart);
@@ -2049,9 +2213,7 @@ int ChartDatabase::SearchDirAndAddCharts(wxString& dir_name_base,
             {
                 if (pnewChart)
                     delete pnewChart;
-//                  wxString msg = _T("   Not adding chart file: ");
-//                  msg.Append(full_name);
-//                  wxLogMessage(msg);
+//                    wxLogMessage(wxString::Format(_T("   Not adding chart file: %s"), msg_fn.c_str()));
             }
       }
 
@@ -2081,14 +2243,14 @@ bool ChartDatabase::AddChart( wxString &chartfilename, ChartClassDescriptor &cha
     ChartTableEntry *pnewChart = NULL;
     bool bAddFinal = true;
     int b_add_msg = 0;
+    wxString msg_fn(full_name);
+    msg_fn.Replace(_T("%"), _T("%%"));
     
     pnewChart = CreateChartTableEntry(full_name, chart_desc);
     if(!pnewChart)
     {
         bAddFinal = false;
-        wxString msg = _T("   CreateChartTableEntry() failed for file: ");
-        msg.Append(full_name);
-        wxLogMessage(msg);
+        wxLogMessage(wxString::Format(_T("   CreateChartTableEntry() failed for file: %s"), msg_fn.c_str()));
         return false;
     }
     else         // traverse the existing database looking for duplicates, and choosing the right one
@@ -2116,9 +2278,7 @@ bool ChartDatabase::AddChart( wxString &chartfilename, ChartClassDescriptor &cha
                         {
                             bAddFinal = true;
                             active_chartTable[isearch].SetValid(false);
-                            wxString msg = _T("   Replacing older chart file of same path: ");
-                            msg.Append(full_name);
-                            wxLogMessage(msg);
+                            wxLogMessage(wxString::Format(_T("   Replacing older chart file of same path: %s"), msg_fn.c_str()));
                         }
                         
                         break;
@@ -2141,9 +2301,7 @@ bool ChartDatabase::AddChart( wxString &chartfilename, ChartClassDescriptor &cha
                             {
                                 active_chartTable[isearch].SetValid(true);
                                 bAddFinal = false;
-                                wxString msg = _T("   Retaining newer chart file of same name: ");
-                                msg.Append(full_name);
-                                wxLogMessage(msg);
+                                wxLogMessage(wxString::Format(_T("   Retaining newer chart file of same name: %s"), msg_fn.c_str()));
                                 
                             }
                         }
@@ -2161,9 +2319,7 @@ bool ChartDatabase::AddChart( wxString &chartfilename, ChartClassDescriptor &cha
                         {
                             active_chartTable[isearch].SetValid(false);
                             bAddFinal = true;
-                            wxString msg = _T("   Replacing older chart file of same name: ");
-                            msg.Append(full_name);
-                            wxLogMessage(msg);
+                            wxLogMessage(wxString::Format(_T("   Replacing older chart file of same name: %s"), msg_fn.c_str()));
                         }
                         
                         break;
@@ -2183,9 +2339,7 @@ bool ChartDatabase::AddChart( wxString &chartfilename, ChartClassDescriptor &cha
             {
                 if(0 == b_add_msg)
                 {
-                    wxString msg = _T("   Adding chart file: ");
-                    msg.Append(full_name);
-                    wxLogMessage(msg);
+                    wxLogMessage(wxString::Format(_T("   Adding chart file: %s"), msg_fn.c_str()));
                 }
 
                 active_chartTable.Add(pnewChart);
@@ -2195,9 +2349,7 @@ bool ChartDatabase::AddChart( wxString &chartfilename, ChartClassDescriptor &cha
             else
             {
                 delete pnewChart;
-                //                  wxString msg = _T("   Not adding chart file: ");
-                //                  msg.Append(full_name);
-                //                  wxLogMessage(msg);
+                //                  wxLogMessage(wxString::Format(_T("   Not adding chart file: %s"), msg_fn.c_str()));
                 rv = false;
             }
             
@@ -2222,16 +2374,16 @@ bool ChartDatabase::AddSingleChart( wxString &ChartFullPath, bool b_force_full_s
     ChartClassDescriptor desc;
     for(unsigned int i=0 ; i < m_ChartClassDescriptorArray.GetCount() ; i++)
     {
-        if(m_ChartClassDescriptorArray.Item(i).m_descriptor_type == PLUGIN_DESCRIPTOR)
+        if(m_ChartClassDescriptorArray[i].m_descriptor_type == PLUGIN_DESCRIPTOR)
         {
-            if(m_ChartClassDescriptorArray.Item(i).m_search_mask == ext_upper)
+            if(m_ChartClassDescriptorArray[i].m_search_mask == ext_upper)
             {
-                desc = m_ChartClassDescriptorArray.Item(i);
+                desc = m_ChartClassDescriptorArray[i];
                 break;
             }
-            if(m_ChartClassDescriptorArray.Item(i).m_search_mask == ext_lower)
+            if(m_ChartClassDescriptorArray[i].m_search_mask == ext_lower)
             {
-                desc = m_ChartClassDescriptorArray.Item(i);
+                desc = m_ChartClassDescriptorArray[i];
                 break;
             }
         }
@@ -2272,7 +2424,7 @@ bool ChartDatabase::AddSingleChart( wxString &ChartFullPath, bool b_force_full_s
     ArrayOfCDI ChartDirArray = GetChartDirArray();
     for(unsigned int i=0 ; i < ChartDirArray.GetCount(); i++)
     {
-        ChartDirInfo cdi = ChartDirArray.Item(i);
+        ChartDirInfo cdi = ChartDirArray[i];
         
         ChartDirInfo newcdi = cdi;
         
@@ -2301,7 +2453,7 @@ bool ChartDatabase::AddSingleChart( wxString &ChartFullPath, bool b_force_full_s
     
     for(unsigned int i=0 ; i < GetChartDirArray().GetCount(); i++)
     {
-        ChartDirInfo cdi = GetChartDirArray().Item(i);
+        ChartDirInfo cdi = GetChartDirArray()[i];
         m_chartDirs.Add( cdi.fullpath );
     }
     
@@ -2343,7 +2495,7 @@ bool ChartDatabase::RemoveSingleChart( wxString &ChartFullPath )
         
         ArrayOfCDI ChartDirArray = GetChartDirArray();
         for(unsigned int i=0 ; i < ChartDirArray.GetCount(); i++){
-            ChartDirInfo cdi = ChartDirArray.Item(i);
+            ChartDirInfo cdi = ChartDirArray[i];
             
             ChartDirInfo newcdi = cdi;
             
@@ -2358,7 +2510,7 @@ bool ChartDatabase::RemoveSingleChart( wxString &ChartFullPath )
     m_chartDirs.Clear();
     for(unsigned int i=0 ; i < GetChartDirArray().GetCount(); i++)
     {
-        ChartDirInfo cdi = GetChartDirArray().Item(i);
+        ChartDirInfo cdi = GetChartDirArray()[i];
         m_chartDirs.Add( cdi.fullpath );
     }
     
@@ -2385,24 +2537,20 @@ ChartBase *ChartDatabase::GetChart(const wxChar *theFilePath, ChartClassDescript
 
 ChartTableEntry *ChartDatabase::CreateChartTableEntry(const wxString &filePath, ChartClassDescriptor &chart_desc)
 {
-      wxString msg = wxT("Loading chart data for ");
-      msg.Append(filePath);
-      wxLogMessage(msg);
+      wxString msg_fn(filePath);
+      msg_fn.Replace(_T("%"), _T("%%"));
+      wxLogMessage(wxString::Format(_T("Loading chart data for %s"), msg_fn.c_str()));
 
       ChartBase *pch = GetChart(filePath, chart_desc);
       if (pch == NULL) {
-            wxString msg = wxT("   ...creation failed for ");
-            msg.Append(filePath);
-            wxLogMessage(msg);
+            wxLogMessage(wxString::Format(_T("   ...creation failed for %s"), msg_fn.c_str()));
             return NULL;
       }
 
       InitReturn rc = pch->Init(filePath, HEADER_ONLY);
       if (rc != INIT_OK) {
             delete pch;
-            wxString msg = wxT("   ...initialization failed for ");
-            msg.Append(filePath);
-            wxLogMessage(msg);
+            wxLogMessage(wxString::Format(_T("   ...initialization failed for %s"), msg_fn.c_str()));
             return NULL;
       }
 
@@ -2603,6 +2751,37 @@ int  ChartDatabase::GetnAuxPlyEntries(int dbIndex)
             return 0;
 }
 
+//-------------------------------------------------------------------
+//      Get vector of reduced Plypoints
+//-------------------------------------------------------------------
+std::vector<float> ChartDatabase::GetReducedPlyPoints(int dbIndex)
+{
+    if((bValid) && (dbIndex >= 0) && (dbIndex < (int)active_chartTable.size())){
+        ChartTableEntry *pentry = GetpChartTableEntry(dbIndex);
+        if(pentry)
+            return pentry->GetReducedPlyPoints();
+    }
+    
+    std::vector<float> dummy;
+    return dummy;
+}
+
+//-------------------------------------------------------------------
+//      Get vector of reduced AuxPlypoints
+//-------------------------------------------------------------------
+std::vector<float> ChartDatabase::GetReducedAuxPlyPoints(int dbIndex, int iTable)
+{
+    if((bValid) && (dbIndex >= 0) && (dbIndex < (int)active_chartTable.size())){
+        ChartTableEntry *pentry = GetpChartTableEntry(dbIndex);
+        if(pentry)
+            return pentry->GetReducedAuxPlyPoints( iTable );
+    }
+    
+    std::vector<float> dummy;
+    return dummy;
+}
+
+
 bool  ChartDatabase::IsChartAvailable(int dbIndex)
 {
     if((bValid) && (dbIndex >= 0) && (dbIndex < (int)active_chartTable.size()))
@@ -2625,14 +2804,20 @@ bool  ChartDatabase::IsChartAvailable(int dbIndex)
         
         for(unsigned int i=0 ; i < m_ChartClassDescriptorArray.GetCount() ; i++)
         {
-            if(m_ChartClassDescriptorArray.Item(i).m_descriptor_type == PLUGIN_DESCRIPTOR)
-            {
-                if(m_ChartClassDescriptorArray.Item(i).m_search_mask == ext_upper) {
+            if(m_ChartClassDescriptorArray[i].m_descriptor_type == PLUGIN_DESCRIPTOR){
+                
+                wxString search_mask = m_ChartClassDescriptorArray[i].m_search_mask;
+
+                if(search_mask == ext_upper) {
                     return true;
                 }
-                if(m_ChartClassDescriptorArray.Item(i).m_search_mask == ext_lower) {
+                if(search_mask == ext_lower) {
                     return true;
                 }
+                if(path->Matches(search_mask)) {
+                    return true;
+                }
+                
             }
         }
     }
@@ -2655,22 +2840,22 @@ void ChartDatabase::ApplyGroupArray(ChartGroupArray *pGroupArray)
             for(unsigned int igroup = 0; igroup < pGroupArray->GetCount(); igroup++)
             {
                   ChartGroup *pGroup = pGroupArray->Item(igroup);
-                  for(unsigned int j=0; j < pGroup->m_element_array.GetCount(); j++)
+                  for(auto& elem : pGroup->m_element_array )
                   {
-                        wxString element_root = pGroup->m_element_array.Item(j)->m_element_name;
+                        wxString element_root = elem->m_element_name;
                         
                         //  The element may be a full single chart name
                         //  If so, add it
                         //  Otherwise, append a sep character so that similar paths are distinguished.
                         //  See FS#1060
                         if(!chart_full_path->IsSameAs(element_root))
-                            element_root.Append(separator);	// Prevent comingling similar looking path names
+                            element_root.Append(separator);    // Prevent comingling similar looking path names
                         if(chart_full_path->StartsWith(element_root))
                         {
                               bool b_add = true;
-                              for(unsigned int k=0 ; k < pGroup->m_element_array.Item(j)->m_missing_name_array.GetCount(); k++)
+                              for(unsigned int k=0 ; k < elem->m_missing_name_array.size(); k++)
                               {
-                                    wxString missing_item = pGroup->m_element_array.Item(j)->m_missing_name_array.Item(k);
+                                    wxString missing_item = elem->m_missing_name_array[k];
                                     if(chart_full_path->StartsWith(missing_item))
                                     {
                                           if(chart_full_path->IsSameAs( missing_item )) // missing item is full chart name

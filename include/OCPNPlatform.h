@@ -76,10 +76,13 @@ public:
     static void Initialize_1( void );
     
     //  Called from MyApp() immediately before creation of MyFrame()
-    static void Initialize_2( void );
+    void Initialize_2( void );
     
+    //  Called from MyApp()::OnInit() just after gFrame is created, so gFrame is available
+    void Initialize_3( void );
+
     //  Called from MyApp() just before end of MyApp::OnInit()
-    static void Initialize_3( void );
+    static void Initialize_4( void );
     
     static void OnExit_1( void );
     static void OnExit_2( void );
@@ -97,7 +100,9 @@ public:
     double getFontPointsperPixel( void );
     wxSize getDisplaySize();
     double GetDisplaySizeMM();
+    void SetDisplaySizeMM( double size );
     double GetDisplayDPmm();
+    unsigned int GetSelectRadiusPix();
     double GetToolbarScaleFactor( int GUIScaleFactor );
     double GetCompassScaleFactor( int GUIScaleFactor );
     void onStagedResizeFinal();
@@ -111,6 +116,8 @@ public:
     bool GetFullscreen();
     bool SetFullscreen( bool bFull );
     double GetDisplayDensityFactor();
+    
+    double m_pt_per_pixel;
 //--------------------------------------------------------------------------
 //      Per-Platform file/directory support
 //--------------------------------------------------------------------------
@@ -129,6 +136,7 @@ public:
     wxString &GetLogFileName(){ return mlog_file; }
     MyConfig *GetConfigObject();
     wxString GetSupplementalLicenseString();
+    wxString NormalizePath(const wxString &full_path); //Adapt for portable use
     
     int DoFileSelectorDialog( wxWindow *parent, wxString *file_spec, wxString Title, wxString initDir,
                                 wxString suggestedName, wxString wildcard);
@@ -152,13 +160,22 @@ public:
 
     void SetLocaleSearchPrefixes( void );
     wxString GetDefaultSystemLocale();
-    wxString GetAdjustedAppLocale();
     
 #if wxUSE_XLOCALE    
+    wxString GetAdjustedAppLocale();
     wxString ChangeLocale(wxString &newLocaleID, wxLocale *presentLocale, wxLocale** newLocale);
 #endif
     
+    
+//--------------------------------------------------------------------------
+//      Per-Platform OpenGL support
+//--------------------------------------------------------------------------
+    bool BuildGLCaps( void *pbuf );
+    bool IsGLCapable();
+
 private:
+    bool        GetWindowsMonitorSize( int *width, int *height);
+    
     wxString    m_homeDir;
     wxString    m_exePath;
     wxString    m_SData_Dir;
@@ -170,9 +187,12 @@ private:
     FILE        *flog;
     wxLog       *m_Oldlogger;
     wxString    large_log_message;
+    wxSize      m_displaySize;
+    wxSize      m_displaySizeMM;
+    int         m_displaySizeMMOverride;
     
-    
-
+    int         m_monitorWidth, m_monitorHeight;
+    bool        m_bdisableWindowsDisplayEnum;
 };
 
 
